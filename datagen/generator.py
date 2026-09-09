@@ -474,6 +474,81 @@ def generate_corpus(seed: int) -> tuple[list[Record], list[Record]]:
     return main, challenge
 
 
+def generate_novel_phrasing_probe(seed: int) -> list[Record]:
+    """Build the generalisation probe: novel payload phrasings in held-out scaffolds.
+
+    Every other evaluation set in this project draws its payloads from the same
+    pool the Stage 1 rules were written against, which makes a high score there
+    partly a measure of rule-to-generator fit. These documents use phrasings that
+    appear nowhere in the training pools, so a rule that recognises a mechanism
+    still fires and a rule that recognises a phrase does not.
+
+    See ``datagen/novel_phrasings.py`` for what this does and does not establish.
+    """
+    from datagen.novel_phrasings import NOVEL_PAYLOADS
+
+    rng = random.Random(seed + 977)
+    records: list[Record] = []
+
+    for index, payload in enumerate(NOVEL_PAYLOADS):
+        scaffold = HELD_OUT_SCAFFOLDS[index % len(HELD_OUT_SCAFFOLDS)]
+        metadata = _build_metadata(scaffold, rng)
+        visibility = "plain"
+        location = "body"
+
+        if payload.technique == "metadata_payload":
+            paragraphs = _compose_paragraphs(scaffold, rng, MAX_WORDS_TARGET)
+            metadata[payload.field] = payload.text
+            location = "metadata"
+
+        elif payload.technique == "hidden_text":
+            visibility = rng.choice(("zero_width", "hidden_markup"))
+            concealed = (
+                encode_hidden_markup(payload.text, rng)
+                if visibility == "hidden_markup"
+                else encode_unicode_tags(payload.text)
+            )
+            paragraphs = _compose_paragraphs(scaffold, rng, CONCEALED_PROSE_BUDGET)
+            paragraphs[-1] = f"{paragraphs[-1]} {concealed}"
+
+        elif payload.technique == "encoded_payload":
+            blob = encode_base64(payload.text)
+            insert = f"Archived reference block, retained for compatibility: {blob}"
+            paragraphs = _insert_at(
+                _compose_paragraphs(scaffold, rng, MAX_WORDS_TARGET - len(insert.split())),
+                insert,
+                rng.choice(INSERT_POSITIONS),
+            )
+
+        else:
+            budget = MAX_WORDS_TARGET - len(payload.text.split())
+            paragraphs = _insert_at(
+                _compose_paragraphs(scaffold, rng, budget),
+                payload.text,
+                rng.choice(INSERT_POSITIONS),
+            )
+
+        text = "\n\n".join(paragraphs)
+        records.append(
+            Record(
+                id=f"novel-{index + 1:04d}",
+                text=text,
+                label=1,
+                technique=payload.technique,
+                technique_note=payload.note,
+                benign_class=None,
+                metadata=metadata,
+                payload_location=location,
+                payload_visibility=visibility,
+                scaffold=scaffold.key,
+                word_count=len(text.split()),
+                split="novel",
+            )
+        )
+
+    return records
+
+
 def assign_splits(records: list[Record], seed: int) -> None:
     """Assign train, validation and test splits in place.
 

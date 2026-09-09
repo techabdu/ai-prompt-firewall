@@ -30,6 +30,7 @@ from datagen.generator import (  # noqa: E402
     Record,
     assign_splits,
     generate_corpus,
+    generate_novel_phrasing_probe,
 )
 from datagen.scaffolds import HELD_OUT_SCAFFOLDS, MAIN_SCAFFOLDS  # noqa: E402
 from datagen.tokens import MAX_TOKENS, MODEL_NAME, count_tokens, estimate_tokens, load_tokenizer  # noqa: E402
@@ -318,10 +319,12 @@ def main() -> int:
     print(f"Building corpus at seed {args.seed} ...")
     main_records, challenge_records = generate_corpus(args.seed)
     assign_splits(main_records, args.seed)
+    novel_records = generate_novel_phrasing_probe(args.seed)
 
     # Word cap: a hard failure, not a warning. A record over the cap cannot be
     # classified reliably and should never reach the corpus.
-    over_cap = [r for r in main_records + challenge_records if r.word_count > HARD_WORD_CAP]
+    everything = main_records + challenge_records + novel_records
+    over_cap = [r for r in everything if r.word_count > HARD_WORD_CAP]
     if over_cap:
         print(f"FAIL: {len(over_cap)} record(s) exceed the {HARD_WORD_CAP}-word cap.")
         for record in over_cap[:5]:
@@ -341,7 +344,7 @@ def main() -> int:
     else:
         print(f"Measuring tokens with {MODEL_NAME} ...")
 
-    for record in main_records + challenge_records:
+    for record in everything:
         serialized = serialize_document(record.text, record.metadata)
         record.token_count = (
             count_tokens(tokenizer, serialized) if tokenizer else estimate_tokens(serialized)
@@ -351,7 +354,7 @@ def main() -> int:
     # measurement; with the fallback it is a pessimistic estimate, which still
     # makes a useful gate -- the estimate reads high, so a record that breaches
     # it is genuinely at risk rather than merely borderline.
-    over_tokens = [r for r in main_records + challenge_records if r.token_count > MAX_TOKENS]
+    over_tokens = [r for r in everything if r.token_count > MAX_TOKENS]
     if over_tokens:
         basis = "measured" if tokenizer else "estimated"
         print(f"FAIL: {len(over_tokens)} record(s) exceed the {MAX_TOKENS}-token ceiling ({basis}).")
@@ -363,6 +366,7 @@ def main() -> int:
     data_dir: Path = args.out
     write_jsonl(data_dir / "corpus.jsonl", main_records)
     write_jsonl(data_dir / "challenge.jsonl", challenge_records)
+    write_jsonl(data_dir / "novel_phrasings.jsonl", novel_records)
     for split in ("train", "val", "test"):
         write_jsonl(
             data_dir / "splits" / f"{split}.jsonl",
@@ -383,6 +387,7 @@ def main() -> int:
     if manifest["token_count"]:
         label = "measured" if manifest["token_counts_verified"] else "ESTIMATED"
         print(f"  tokens      : max {manifest['token_count']['max']} ({label}, ceiling {MAX_TOKENS})")
+    print(f"  probe       : {len(novel_records)} novel-phrasing documents (generalisation check)")
     print(f"  verified    : token_counts_verified = {manifest['token_counts_verified']}")
     return 0
 

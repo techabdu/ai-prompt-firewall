@@ -25,7 +25,7 @@ be read as one.
 |---|---|---|
 | 1 | FastAPI skeleton, API contract | **done** |
 | 2 | Labelled synthetic dataset | **done** |
-| 3 | Stage 1 heuristic pre-filter + tests | not started |
+| 3 | Stage 1 heuristic pre-filter + tests | **done** |
 | 4 | Stage 2 classifier, fine-tuned on Colab | not started |
 | 5 | Both stages wired behind one endpoint | not started |
 | 6 | Evaluation harness, benchmarked against Rebuff | not started |
@@ -229,6 +229,74 @@ detector generalises to document types it has never seen.
 
 ---
 
+## Stage 1: the heuristic pre-filter
+
+Thirteen rules — regular expressions, character detection, structural patterns.
+No model, no learned parameters, standard library only. Mean latency **0.79 ms**
+per document (p95 1.21 ms), which is what justifies running it on everything
+before the transformer sees anything.
+
+```bash
+python scripts/evaluate_stage1.py           # full report
+python scripts/evaluate_stage1.py --sweep   # threshold sweep (training split only)
+pytest tests/test_stage1_evaluation.py -s   # the same metrics, as tests
+```
+
+### Results at threshold 0.30
+
+| Split | n | Precision | Recall | F1 | FPR |
+|---|---|---|---|---|---|
+| train | 560 | 1.000 | 0.986 | 0.993 | 0.000 |
+| val | 120 | 1.000 | 1.000 | 1.000 | 0.000 |
+| test | 120 | 1.000 | 1.000 | 1.000 | 0.000 |
+| challenge | 60 | 1.000 | 0.967 | 0.983 | 0.000 |
+| **novel phrasings** | 24 | 1.000 | **0.333** | 0.500 | — |
+
+**Read the last row first.** Perfect scores on the corpus are not what they
+look like. The rules were written by someone who could read `datagen/payloads.py`,
+so those figures partly measure how well the rules fit the generator. The
+challenge set does not expose this — it varies the document scaffold while
+drawing payloads from the same pool.
+
+`data/v1/novel_phrasings.jsonl` does expose it: 24 payloads saying the same
+things in words that appear nowhere in the training pools. Recall drops from
+1.000 to 0.333, and it drops in a very specific way:
+
+| Technique | test | challenge | novel phrasing |
+|---|---|---|---|
+| hidden_text | 10/10 | 5/5 | **4/4** |
+| encoded_payload | 10/10 | 5/5 | **4/4** |
+| imperative_override | 10/10 | 5/5 | **0/4** |
+| disguised_legitimate | 10/10 | 5/5 | **0/4** |
+| conditioned_delayed | 10/10 | 5/5 | **0/4** |
+| metadata_payload | 10/10 | 4/5 | **0/4** |
+
+Rules that detect a **mechanism** — an invisible character, a style attribute, an
+encoding — generalise perfectly, because detecting a Unicode Tag character does
+not depend on what it spells. Rules that detect a **phrase** do not generalise at
+all, because an attacker has no reason to use the wording a rule author happened
+to anticipate.
+
+That split is the case for Stage 2, stated as a measurement rather than an
+assumption. It is asserted in `tests/test_stage1_evaluation.py` so a later change
+cannot quietly erase it.
+
+### Fast-reject: not built, and the evidence says not to
+
+The project reference leaves open whether Stage 1 may block a document outright
+on a high-confidence match. The evidence needed is a score band where precision
+is perfect and a lower band where it is not. On the training split precision is
+1.000 in *every* band, down to 0.50–0.70.
+
+Uniform perfection is not evidence that fast-rejecting is safe; it is evidence
+that the corpus cannot distinguish a safe threshold from an unsafe one. Combined
+with 0.333 recall on rephrased attacks — the rules are far more fragile than the
+corpus suggests — there is no basis for letting Stage 1 block anything on its
+own. No fast-reject path is built, and none should appear in an architecture
+diagram.
+
+---
+
 ## Layout
 
 ```
@@ -242,18 +310,28 @@ app/
   routers/
     health.py        GET /health
     scan.py          POST /v1/scan
-  detection/         stage1.py arrives in Phase 3, stage2.py in Phase 5
+  detection/
+    stage1.py        the heuristic pre-filter: scoring and entry point
+    rules.py         the thirteen rules and their weights
+    normalise.py     de-obfuscation, run before the phrase rules
+                     stage2.py arrives in Phase 5
 datagen/             corpus construction (build-time only, not installed)
   scaffolds.py       the ordinary documents that carry the corpus
   payloads.py        injection payloads, by technique
   benign.py          benign inserts, by class
+  novel_phrasings.py the generalisation probe
   generator.py       deterministic composition and split assignment
   tokens.py          Stage 2 token counting, with an offline fallback
-scripts/             build_dataset, check_tokens, export_for_colab
+scripts/             build_dataset, check_tokens, export_for_colab, evaluate_stage1
 data/v1/             the corpus, splits, exports, manifest, dataset card
 tests/
 docs/                Phase specifications
 ```
+
+Stage 1 is **not wired into `/v1/scan`** — the roadmap places that in Phase 5, and
+`stage_1_ready` on `/health` stays `false` until the endpoint actually calls the
+detector. The flag means loaded into the request path, not present in the
+repository, and it would be lying if it said otherwise.
 
 `app/serialization.py` sits in `app/` rather than in `datagen/` on purpose: it
 defines the exact string the classifier is trained on, and Phase 5 imports it so

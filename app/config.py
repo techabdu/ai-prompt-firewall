@@ -22,6 +22,22 @@ API_V1_PREFIX = "/v1"
 DETECTOR_VERSION = "phase-1-stub"
 
 
+# --- Stage 1: heuristic pre-filter -------------------------------------------
+
+# Score at or above which Stage 1 calls a document injected.
+#
+# Selected by sweeping thresholds on the TRAINING split alone -- never on
+# validation, which Stage 2 uses for checkpoint selection, and never on test,
+# which nothing may touch before the Phase 6 evaluation. Choosing a threshold on
+# test data borrows information from the very set the reported number is meant
+# to measure, and it is the more tempting error here because the sweep takes a
+# second and the test split is sitting right there.
+#
+# Reproduce the sweep that produced this value with:
+#     python scripts/evaluate_stage1.py --sweep
+STAGE1_THRESHOLD = 0.30
+
+
 # --- Document limits --------------------------------------------------------
 
 # Per-document word ceiling. A hard constraint of the project: documents longer

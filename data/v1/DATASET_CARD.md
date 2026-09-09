@@ -137,6 +137,7 @@ defences, which are a different attack surface and deliberately absent.
 |---|---|---|
 | `challenge.jsonl` | 60 | `1c3f6ab5219a8d14…` |
 | `corpus.jsonl` | 800 | `69cd5df01ff3fe2a…` |
+| `novel_phrasings.jsonl` | 24 | `b1a6855287caea02…` |
 | `splits/test.jsonl` | 120 | `041de94ba7493d11…` |
 | `splits/train.jsonl` | 560 | `a82c2d7bbb04b8d6…` |
 | `splits/val.jsonl` | 120 | `7b16ffe809ff8f91…` |

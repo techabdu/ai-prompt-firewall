@@ -83,6 +83,10 @@
       "sha256": "69cd5df01ff3fe2a02c4d9f8e1f33741d857ed0789a4cfff135961b9d567599f",
       "records": 800
     },
+    "novel_phrasings.jsonl": {
+      "sha256": "b1a6855287caea02ba35bef62e462dc654e56642148001043a336ae6786b5a8c",
+      "records": 24
+    },
     "splits/test.jsonl": {
       "sha256": "041de94ba7493d114c41028557a648ef0d93d96a45f9acec013c003b1b899983",
       "records": 120
