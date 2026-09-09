@@ -19,10 +19,22 @@ dev = [
     "pytest",
     "httpx",
 ]
+# Dataset construction only. transformers is used for its tokenizer alone --
+# no torch, no GPU, no model weights -- to verify the corpus against the Stage 2
+# token ceiling at build time. Nothing in the running service imports it, so the
+# CPU-only, no-cloud-inference constraint is untouched.
+data = [
+    "transformers",
+]
 
 [tool.setuptools]
 # Version lives in app/__init__.py so there is one source of truth for it,
 # and the health endpoint reports the same string the package declares.
+#
+# `datagen` is deliberately absent: the corpus is an input to fine-tuning, not
+# a runtime dependency of the classifier, so it is not part of the installed
+# distribution. It stays importable from the repository root for the scripts
+# and the test suite.
 packages = ["app", "app.models", "app.routers", "app.detection"]
 
 [tool.setuptools.dynamic]

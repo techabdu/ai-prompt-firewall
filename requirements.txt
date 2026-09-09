@@ -18,6 +18,13 @@ pydantic==2.13.5
 pytest==9.1.1
 httpx==0.28.1
 
+# --- Dataset construction (build-time only) ---
+# Used for the distilbert-base-uncased tokenizer alone, to verify the corpus
+# against the 512-token ceiling. It pulls no torch and needs no GPU, and no
+# module under app/ imports it -- the service never loads it at runtime.
+# The vocabulary is fetched from the model hub the first time it runs.
+transformers==5.17.0
+
 # --- Phase 5 (Stage 2 inference) ---
 # transformers and torch are NOT listed yet. They arrive when the fine-tuned
 # model artifact does, and torch must be installed from the CPU-only wheel

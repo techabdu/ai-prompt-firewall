@@ -1,0 +1,99 @@
+{
+  "dataset_version": "v1",
+  "schema_version": 1,
+  "built_on": "2026-09-09",
+  "generator_seed": 20260909,
+  "generated_by": "scripts/build_dataset.py",
+  "language": "en",
+  "word_cap": 350,
+  "token_ceiling": 512,
+  "token_counts_verified": false,
+  "tokenizer": null,
+  "counts": {
+    "total": 860,
+    "main_corpus": 800,
+    "malicious": 400,
+    "benign": 400,
+    "challenge": 60
+  },
+  "splits": {
+    "challenge": 60,
+    "test": 120,
+    "train": 560,
+    "val": 120
+  },
+  "techniques": {
+    "conditioned_delayed": 66,
+    "disguised_legitimate": 68,
+    "encoded_payload": 66,
+    "hidden_text": 66,
+    "imperative_override": 68,
+    "metadata_payload": 66
+  },
+  "benign_classes": {
+    "discusses_injection": 100,
+    "imperative_benign": 100,
+    "lexical_decoy": 100,
+    "ordinary": 100
+  },
+  "scaffolds": {
+    "changelog": 80,
+    "faq_page": 80,
+    "incident_postmortem": 80,
+    "meeting_minutes": 80,
+    "onboarding_guide": 80,
+    "ops_runbook": 80,
+    "policy_memo": 80,
+    "support_ticket": 80,
+    "vendor_questionnaire": 80,
+    "wiki_page": 80
+  },
+  "challenge_scaffolds": {
+    "api_integration_guide": 14,
+    "expense_policy": 14,
+    "job_description": 16,
+    "research_abstract": 16
+  },
+  "payload_location": {
+    "body": 334,
+    "metadata": 66
+  },
+  "payload_visibility": {
+    "hidden_markup": 30,
+    "plain": 334,
+    "zero_width": 36
+  },
+  "word_count": {
+    "min": 143,
+    "max": 270,
+    "mean": 214.9
+  },
+  "token_count": {
+    "min": 248,
+    "max": 474,
+    "mean": 372.0,
+    "over_ceiling": 0
+  },
+  "files": {
+    "challenge.jsonl": {
+      "sha256": "1c3f6ab5219a8d1436c2cb4dbae1ec5d618c04d829bc8686ad40f60f44a9b429",
+      "records": 60
+    },
+    "corpus.jsonl": {
+      "sha256": "69cd5df01ff3fe2a02c4d9f8e1f33741d857ed0789a4cfff135961b9d567599f",
+      "records": 800
+    },
+    "splits/test.jsonl": {
+      "sha256": "041de94ba7493d114c41028557a648ef0d93d96a45f9acec013c003b1b899983",
+      "records": 120
+    },
+    "splits/train.jsonl": {
+      "sha256": "a82c2d7bbb04b8d6bd26fd7ad8ddd8dd5e0521f293d4b24aed04bfe069eb06c4",
+      "records": 560
+    },
+    "splits/val.jsonl": {
+      "sha256": "7b16ffe809ff8f91a09f3edb281db790abd35be5222f2adac5eebaa95b54532a",
+      "records": 120
+    }
+  }
+}

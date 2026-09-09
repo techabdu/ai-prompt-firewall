@@ -24,7 +24,7 @@ be read as one.
 | Phase | What it adds | State |
 |---|---|---|
 | 1 | FastAPI skeleton, API contract | **done** |
-| 2 | Labelled synthetic dataset | not started |
+| 2 | Labelled synthetic dataset | **done** |
 | 3 | Stage 1 heuristic pre-filter + tests | not started |
 | 4 | Stage 2 classifier, fine-tuned on Colab | not started |
 | 5 | Both stages wired behind one endpoint | not started |
@@ -175,12 +175,67 @@ above.
 
 ---
 
+---
+
+## The dataset
+
+860 labelled documents: 800 in the main corpus, evenly split between benign and
+indirect-injection-bearing, plus a 60-document challenge set. English only, every
+document inside the word cap.
+
+```bash
+python scripts/build_dataset.py      # rebuild the corpus (deterministic)
+python scripts/check_tokens.py       # verify against the 512-token ceiling
+python scripts/export_for_colab.py   # write the flat files Colab expects
+```
+
+`data/v1/DATASET_CARD.md` documents composition, construction and limitations.
+`data/v1/manifest.json` carries counts, distributions, checksums and the seed.
+
+### Canonical corpus, derived exports
+
+`data/v1/corpus.jsonl` is the source of truth: one record per line, full schema —
+technique, benign class, metadata, payload location and visibility, scaffold,
+split. JSONL because adding an example is a one-line diff, where a JSON array
+reflows on every insert and makes a dataset change unreviewable.
+
+`data/v1/export/dataset_train.json` and `dataset_val.json` are generated from it,
+flattened to exactly the two keys (`text`, `label`) the Colab fine-tuning script
+expects. They are regenerable with one command and never edited by hand, so the
+fine-tuning script never has to change and the two views cannot drift apart.
+
+**The test split is not exported.** Selecting the best checkpoint on validation F1
+makes validation a model-selection set, so its metrics are optimistically biased.
+The test split stays here, untouched by fine-tuning, until Phase 6.
+
+### What the corpus is built to resist
+
+Malicious documents cover six techniques: `imperative_override`,
+`disguised_legitimate`, `hidden_text`, `encoded_payload`, `metadata_payload`,
+`conditioned_delayed`.
+
+The benign half is where a dataset is won or lost. Alongside `ordinary`
+documents it contains `discusses_injection` (security training material quoting
+attack strings as examples), `lexical_decoy` ("ignore the third column", "follow
+the instructions on page four") and `imperative_benign` — genuine runbooks full
+of privileged commands, structurally near-identical to the `disguised_legitimate`
+attack. A corpus without these lets a keyword matcher score well while detecting
+nothing.
+
+Every scaffold carries both labels in roughly equal numbers, so the document
+template cannot serve as a proxy for the label. Four scaffolds are held out of
+training entirely and appear only in the challenge set, which asks whether a
+detector generalises to document types it has never seen.
+
+---
+
 ## Layout
 
 ```
 app/
   main.py            application factory, router mounting
   config.py          named constants: word cap, token ceiling, detector version
+  serialization.py   the metadata-and-body join Stage 2 reads
   models/
     requests.py      ScanRequest
     responses.py     ScanResponse, StageResult, HealthResponse
@@ -188,9 +243,22 @@ app/
     health.py        GET /health
     scan.py          POST /v1/scan
   detection/         stage1.py arrives in Phase 3, stage2.py in Phase 5
+datagen/             corpus construction (build-time only, not installed)
+  scaffolds.py       the ordinary documents that carry the corpus
+  payloads.py        injection payloads, by technique
+  benign.py          benign inserts, by class
+  generator.py       deterministic composition and split assignment
+  tokens.py          Stage 2 token counting, with an offline fallback
+scripts/             build_dataset, check_tokens, export_for_colab
+data/v1/             the corpus, splits, exports, manifest, dataset card
 tests/
 docs/                Phase specifications
 ```
+
+`app/serialization.py` sits in `app/` rather than in `datagen/` on purpose: it
+defines the exact string the classifier is trained on, and Phase 5 imports it so
+that inference and fine-tuning cannot use different layouts. A mismatch there
+would silently stop metadata-borne payloads being detected.
 
 `app/config.py` holds every tunable number in one place — `MAX_WORDS`,
 `STAGE2_MAX_TOKENS`, `DETECTOR_VERSION` — because each has to be quoted and justified in
