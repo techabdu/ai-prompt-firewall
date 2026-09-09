@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Environments
+.venv/
+venv/
+env/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Stage 2 model artifact — fine-tuned off-repo on Colab and downloaded in,
+# far too large for version control. Phase 5 documents where to place it.
+stage2_transformer/
+*.zip
+*.safetensors
+*.bin
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store

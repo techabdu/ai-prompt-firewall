@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-prompt-firewall"
+description = "Two-stage classifier screening documents for indirect prompt-injection payloads before RAG ingestion"
+readme = "README.md"
+requires-python = ">=3.10"
+dynamic = ["version"]
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "httpx",
+]
+
+[tool.setuptools]
+# Version lives in app/__init__.py so there is one source of truth for it,
+# and the health endpoint reports the same string the package declares.
+packages = ["app", "app.models", "app.routers", "app.detection"]
+
+[tool.setuptools.dynamic]
+version = { attr = "app.__version__" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Puts the repository root on sys.path, so the test suite imports app.* without
+# a path shim in conftest.py.
+pythonpath = ["."]
+addopts = "-q"
