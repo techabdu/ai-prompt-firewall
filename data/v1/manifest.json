@@ -1,7 +1,7 @@
 {
   "dataset_version": "v1",
   "schema_version": 1,
-  "built_on": "2026-09-09",
+  "built_on": "2026-09-10",
   "generator_seed": 20260909,
   "generated_by": "scripts/build_dataset.py",
   "language": "en",
@@ -10,14 +10,16 @@
   "token_counts_verified": false,
   "tokenizer": null,
   "counts": {
-    "total": 860,
+    "total": 884,
     "main_corpus": 800,
     "malicious": 400,
     "benign": 400,
-    "challenge": 60
+    "challenge": 60,
+    "novel_phrasing_probe": 24
   },
   "splits": {
     "challenge": 60,
+    "novel": 24,
     "test": 120,
     "train": 560,
     "val": 120
@@ -66,12 +68,12 @@
   "word_count": {
     "min": 143,
     "max": 270,
-    "mean": 214.9
+    "mean": 213.5
   },
   "token_count": {
     "min": 248,
     "max": 474,
-    "mean": 372.0,
+    "mean": 370.0,
     "over_ceiling": 0
   },
   "files": {

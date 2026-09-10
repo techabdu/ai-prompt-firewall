@@ -67,6 +67,18 @@ def challenge() -> list[dict]:
 
 
 @pytest.fixture(scope="module")
+def novel() -> list[dict]:
+    """The novel-phrasing probe.
+
+    Shipped data, gated on both caps by the build, and previously exempt from
+    every check in this module -- no schema check, no word cap, no leakage
+    check. A file that ships without them is exactly the silent failure this
+    suite exists to catch.
+    """
+    return _read("novel_phrasings.jsonl")
+
+
+@pytest.fixture(scope="module")
 def manifest() -> dict:
     path = DATA_DIR / "manifest.json"
     if not path.exists():
@@ -77,13 +89,13 @@ def manifest() -> dict:
 # --- schema -----------------------------------------------------------------
 
 
-def test_every_record_has_exactly_the_expected_fields(corpus, challenge) -> None:
-    for record in corpus + challenge:
+def test_every_record_has_exactly_the_expected_fields(corpus, challenge, novel) -> None:
+    for record in corpus + challenge + novel:
         assert set(record) == EXPECTED_FIELDS, f"{record['id']} has the wrong fields"
 
 
-def test_field_types_are_consistent(corpus, challenge) -> None:
-    for record in corpus + challenge:
+def test_field_types_are_consistent(corpus, challenge, novel) -> None:
+    for record in corpus + challenge + novel:
         assert isinstance(record["text"], str) and record["text"].strip()
         assert isinstance(record["metadata"], dict)
         assert isinstance(record["word_count"], int)
@@ -93,21 +105,21 @@ def test_field_types_are_consistent(corpus, challenge) -> None:
 # --- labels and classes -----------------------------------------------------
 
 
-def test_malicious_records_carry_a_technique_and_no_benign_class(corpus, challenge) -> None:
+def test_malicious_records_carry_a_technique_and_no_benign_class(corpus, challenge, novel) -> None:
     """A record cannot be both, and a malicious one must say which technique.
 
     Without this, a mislabelled record would quietly land in the wrong stratum
     and the per-technique breakdown would be wrong in a way nothing else checks.
     """
-    for record in corpus + challenge:
+    for record in corpus + challenge + novel:
         if record["label"] == 1:
             assert record["technique"] in TECHNIQUE_COUNTS, record["id"]
             assert record["technique_note"], record["id"]
             assert record["benign_class"] is None, record["id"]
 
 
-def test_benign_records_carry_a_class_and_no_technique(corpus, challenge) -> None:
-    for record in corpus + challenge:
+def test_benign_records_carry_a_class_and_no_technique(corpus, challenge, novel) -> None:
+    for record in corpus + challenge + novel:
         if record["label"] == 0:
             assert record["benign_class"] in BENIGN_COUNTS, record["id"]
             assert record["technique"] is None, record["id"]
@@ -130,9 +142,9 @@ def test_hidden_text_records_declare_a_concealment_form(corpus) -> None:
 # --- duplication and leakage ------------------------------------------------
 
 
-def test_no_duplicate_document_bodies(corpus, challenge) -> None:
+def test_no_duplicate_document_bodies(corpus, challenge, novel) -> None:
     """Duplicates inflate the corpus without adding information."""
-    texts = [record["text"] for record in corpus + challenge]
+    texts = [record["text"] for record in corpus + challenge + novel]
     duplicates = [text for text, count in Counter(texts).items() if count > 1]
 
     assert not duplicates, f"{len(duplicates)} duplicated document bodies"
@@ -163,23 +175,35 @@ def test_challenge_set_shares_no_text_with_the_corpus(corpus, challenge) -> None
     assert not overlap, f"{len(overlap)} document(s) shared with the challenge set"
 
 
+def test_probe_shares_no_text_with_the_corpus_or_challenge_set(corpus, challenge, novel) -> None:
+    """The probe composes from the same held-out scaffolds as the challenge set.
+
+    A byte-identical body is therefore possible, and the same document sitting in
+    two evaluation sets would make both figures wrong with no visible symptom.
+    """
+    existing = {record["text"] for record in corpus + challenge}
+    overlap = existing & {record["text"] for record in novel}
+
+    assert not overlap, f"{len(overlap)} probe document(s) duplicate corpus text"
+
+
 # --- length limits ----------------------------------------------------------
 
 
-def test_no_record_exceeds_the_word_cap(corpus, challenge) -> None:
-    for record in corpus + challenge:
+def test_no_record_exceeds_the_word_cap(corpus, challenge, novel) -> None:
+    for record in corpus + challenge + novel:
         assert record["word_count"] <= HARD_WORD_CAP, (
             f"{record['id']}: {record['word_count']} words"
         )
 
 
-def test_no_record_exceeds_the_token_ceiling(corpus, challenge) -> None:
+def test_no_record_exceeds_the_token_ceiling(corpus, challenge, novel) -> None:
     """Holds whether the counts were measured or estimated.
 
     When they are estimates the bar is if anything stricter, since the estimator
     reads high on purpose.
     """
-    for record in corpus + challenge:
+    for record in corpus + challenge + novel:
         assert record["token_count"] <= MAX_TOKENS, (
             f"{record['id']} ({record['technique'] or record['benign_class']}): "
             f"{record['token_count']} tokens from {record['word_count']} words"
@@ -308,9 +332,11 @@ def test_a_different_seed_produces_a_different_corpus() -> None:
 # --- manifest ---------------------------------------------------------------
 
 
-def test_manifest_counts_match_the_corpus(corpus, challenge, manifest) -> None:
+def test_manifest_counts_match_the_corpus(corpus, challenge, novel, manifest) -> None:
     assert manifest["counts"]["main_corpus"] == len(corpus)
     assert manifest["counts"]["challenge"] == len(challenge)
+    assert manifest["counts"]["novel_phrasing_probe"] == len(novel)
+    assert manifest["counts"]["total"] == len(corpus) + len(challenge) + len(novel)
     assert manifest["counts"]["malicious"] == sum(1 for r in corpus if r["label"] == 1)
 
 

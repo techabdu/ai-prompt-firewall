@@ -4,7 +4,7 @@ Labelled corpus of benign and indirect-prompt-injection-bearing documents, for
 training and evaluating a two-stage classifier that screens documents before
 they enter a RAG pipeline's context window.
 
-Built by `scripts/build_dataset.py` at seed `20260909` on 2026-09-09. The build is
+Built by `scripts/build_dataset.py` at seed `20260909` on 2026-09-10. The build is
 deterministic: the same seed reproduces this corpus exactly.
 
 ## Composition
@@ -15,9 +15,10 @@ deterministic: the same seed reproduces this corpus exactly.
 | — malicious (label 1) | 400 |
 | — benign (label 0) | 400 |
 | Challenge set | 60 |
-| **Total** | **860** |
+| Novel-phrasing probe | 24 |
+| **Total** | **884** |
 
-Splits: challenge 60, test 120, train 560, val 120
+Splits: challenge 60, novel 24, test 120, train 560, val 120
 
 ### Malicious techniques
 
@@ -96,7 +97,7 @@ tokenize far less efficiently than English prose.
 
 **The real tokenizer was not available when this corpus was built**, so `token_count` holds a deliberately pessimistic estimate rather than a measurement. Run `python scripts/check_tokens.py` in an environment with access to the model hub before fine-tuning. Until that is done, the token ceiling is assumed, not established.
 
-Word counts: min 143, max 270, mean 214.9.
+Word counts: min 143, max 270, mean 213.5.
 
 ## Intended use
 

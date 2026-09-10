@@ -231,10 +231,18 @@ detector generalises to document types it has never seen.
 
 ## Stage 1: the heuristic pre-filter
 
-Thirteen rules — regular expressions, character detection, structural patterns.
-No model, no learned parameters, standard library only. Mean latency **0.79 ms**
-per document (p95 1.21 ms), which is what justifies running it on everything
+Fourteen rules — regular expressions, character detection, structural patterns.
+No model, no learned parameters, standard library only. Mean latency **1.08 ms**
+per document (p95 1.52 ms), which is what justifies running it on everything
 before the transformer sees anything.
+
+**Mechanism weights sit below the decision threshold on purpose.** A
+Base64-shaped run, character spacing and a couple of zero-width characters are
+all produced by entirely ordinary documents — checksums, tables flattened by a
+text extractor, text copied out of a web page. What carries weight is the
+*content* recovered from the mechanism: an instruction that appears only once
+the obfuscation is undone, or a blob that decodes into English rather than into
+the noise a checksum decodes to. The mechanism alone is a coincidence.
 
 ```bash
 python scripts/evaluate_stage1.py           # full report
@@ -251,6 +259,12 @@ pytest tests/test_stage1_evaluation.py -s   # the same metrics, as tests
 | test | 120 | 1.000 | 1.000 | 1.000 | 0.000 |
 | challenge | 60 | 1.000 | 0.967 | 0.983 | 0.000 |
 | **novel phrasings** | 24 | 1.000 | **0.333** | 0.500 | — |
+
+These figures survived a post-review repair of eleven detection defects — six
+false-positive classes and two outright evasions, none of which the corpus could
+see, because every one needs a document feature the generator never produces: a
+table, a checksum, an uppercase heading, a stray quote, a multi-line payload.
+`tests/test_stage1_rules.py` pins each as a regression.
 
 **Read the last row first.** Perfect scores on the corpus are not what they
 look like. The rules were written by someone who could read `datagen/payloads.py`,

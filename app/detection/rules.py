@@ -21,6 +21,13 @@ would flag.
 import re
 from dataclasses import dataclass
 
+from app.detection.normalise import (
+    BASE64_RUN_PATTERN,
+    SPACED_RUN_PATTERN,
+    TAG_PATTERN,
+    ZERO_WIDTH_PATTERN,
+)
+
 # --- shared fragments -------------------------------------------------------
 
 # Objects that make an "ignore" instruction an attack rather than ordinary
@@ -68,9 +75,22 @@ _DISCLOSE_VERB = (
     r"list|provid\w+|return|skip|bypass|record\s+and\s+disclose)"
 )
 
-# Up to N intervening words.
 def _gap(words: int) -> str:
-    return rf"(?:\W+\w+){{0,{words}}}?\W+"
+    """Up to roughly N intervening words, within one sentence.
+
+    The gap is bounded by a character class that excludes sentence and paragraph
+    terminators. An earlier version used ``(?:\\W+\\w+){0,N}?\\W+``, and ``\\W``
+    matches both "." and "\\n" -- so the object requirement four rules rest on
+    was satisfied by the first word of the *next* sentence. "Please ignore the
+    appendix. Instructions for reviewers follow below." scored a full 0.60 and
+    was flagged, as did "We evaluated several chatbots.\\n\\nAll teams need to
+    submit reports."
+
+    The corpus could not see this: its benign inserts never juxtapose the two
+    halves of a rule across a boundary, so the measured false-positive rate of
+    zero was silent about an entire class of ordinary prose.
+    """
+    return rf"[^.\n!?;]{{0,{words * 9}}}?"
 
 
 @dataclass(frozen=True)
@@ -232,18 +252,25 @@ PHRASE_RULES: tuple[Rule, ...] = (
     ),
     Rule(
         id="caps_directive",
-        weight=0.25,
+        weight=0.20,
         targets="structural",
         description=(
-            "An all-capitals directive header. Weak on its own -- legitimate documents "
-            "shout occasionally -- but it rarely appears alone in an injected document."
+            "An all-capitals directive header drawn from a fixed vocabulary. Weak on "
+            "its own -- legitimate documents shout occasionally -- and it never "
+            "flags a document by itself."
         ),
-        must_not_match="An ordinary acronym, which is why a trailing colon or dash is required.",
+        must_not_match=(
+            "Ordinary uppercase section headings: REVISION HISTORY:, CHANGE CONTROL -, "
+            "ACCESS REQUEST:, SYSTEM REQUIREMENTS:. A general two-word uppercase "
+            "alternative used to match all of these, and a colon is exactly what a "
+            "section heading carries, so the trailing-punctuation guard did nothing. "
+            "The vocabulary is now closed."
+        ),
         pattern=re.compile(
             r"""
-              \b(?:IMPORTANT|ATTENTION|NOTICE|WARNING|OVERRIDE|SYSTEM|URGENT|ALERT)\b
+              \b(?:IMPORTANT|ATTENTION|OVERRIDE|URGENT)\b
               (?:\s+[A-Z]{2,})*\s*[:\-—]
-            | \b[A-Z]{3,}\s+[A-Z]{3,}\b\s*[:\-—]
+            | \bSYSTEM\s+(?:NOTICE|OVERRIDE|MESSAGE|PROMPT)\b\s*[:\-—]?
             """,
             re.VERBOSE,
         ),
@@ -266,17 +293,18 @@ CHARACTER_RULES: dict[str, Rule] = {
                 "Any character from the Unicode Tags block. Close to conclusive: these "
                 "render as nothing and have no legitimate use in a business document."
             ),
-            pattern=re.compile(r"[\U000E0000-\U000E007F]"),
+            pattern=TAG_PATTERN,
         ),
         Rule(
             id="zero_width_chars",
             weight=0.65,
             targets="encoded_payload",
             description=(
-                "Zero-width characters. Weighted by count, because one or two can "
-                "survive an innocent copy and paste while a dozen cannot."
+                "Zero-width characters, banded by count. A couple genuinely do survive "
+                "copying out of a web page or a CMS editor, so at that level this must "
+                "not flag a document on its own -- see the bands in stage1.py."
             ),
-            pattern=re.compile(r"[​‌‍⁠﻿]"),
+            pattern=ZERO_WIDTH_PATTERN,
         ),
         Rule(
             id="invisible_styling",
@@ -302,25 +330,35 @@ CHARACTER_RULES: dict[str, Rule] = {
         ),
         Rule(
             id="base64_blob",
-            weight=0.30,
+            weight=0.20,
             targets="encoded_payload",
             description=(
-                "A standalone Base64-shaped run. Deliberately low: checksums and "
-                "identifiers look identical. The weight that matters is carried by "
-                "obfuscated_instruction, which fires only if the blob decodes to an "
-                "instruction."
+                "A standalone Base64-shaped run. The weight must stay strictly below "
+                "the decision threshold, because checksums, JWT segments and content "
+                "hashes are identical in shape -- at 0.30 against a 0.30 threshold, one "
+                "artefact checksum flagged a clean changelog on its own. The evidence "
+                "that matters is carried by obfuscated_instruction, which fires only if "
+                "the blob decodes into an instruction."
             ),
-            pattern=re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{24,}={0,2}(?![A-Za-z0-9+/=])"),
+            must_not_match="A release checksum or a JWT header segment, flagging alone.",
+            pattern=BASE64_RUN_PATTERN,
         ),
         Rule(
             id="char_spaced_run",
-            weight=0.60,
+            weight=0.25,
             targets="encoded_payload",
             description=(
-                "Eight or more consecutive single-character tokens. Effectively absent "
-                "from business prose."
+                "Ten or more consecutive single-character tokens. Held below the "
+                "threshold for the same reason as base64_blob: a text extractor "
+                "flattening a table produces exactly this shape, and extracted text is "
+                "what this service is given. The spacing is the mechanism; the evidence "
+                "is the instruction recovered from it."
             ),
-            pattern=re.compile(r"(?<!\S)\S(?:[ \t]+\S){7,}(?!\S)"),
+            must_not_match=(
+                "Flattened table rows, column headers and rating scales: "
+                "'Columns: a b c d e f g h i j', 'Ratings 1 2 3 4 5 6 7 8 9 10'."
+            ),
+            pattern=SPACED_RUN_PATTERN,
         ),
     )
 }
@@ -343,6 +381,23 @@ SYNTHETIC_RULES: dict[str, Rule] = {
                 "counting -- concealment and content are two separate facts."
             ),
             pattern=re.compile(r"(?!)"),  # never matches directly
+        ),
+        Rule(
+            id="decoded_prose_blob",
+            weight=0.55,
+            targets="encoded_payload",
+            description=(
+                "A Base64 run that decodes into readable English. This is the "
+                "discriminator base64_blob cannot make on shape alone: a checksum, a "
+                "content hash and a JWT segment all look like Base64 and none of them "
+                "decodes into prose. Someone encoding a sentence had a reason to."
+            ),
+            must_not_match=(
+                "A release checksum or a JWT header -- random bytes decode to "
+                "unprintable noise, and a JSON header is too punctuation-dense to read "
+                "as prose."
+            ),
+            pattern=re.compile(r"(?!)"),
         ),
         Rule(
             id="metadata_anomaly",

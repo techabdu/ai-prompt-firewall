@@ -474,7 +474,7 @@ def generate_corpus(seed: int) -> tuple[list[Record], list[Record]]:
     return main, challenge
 
 
-def generate_novel_phrasing_probe(seed: int) -> list[Record]:
+def generate_novel_phrasing_probe(seed: int, seen: set[str] | None = None) -> list[Record]:
     """Build the generalisation probe: novel payload phrasings in held-out scaffolds.
 
     Every other evaluation set in this project draws its payloads from the same
@@ -484,10 +484,20 @@ def generate_novel_phrasing_probe(seed: int) -> list[Record]:
     still fires and a rule that recognises a phrase does not.
 
     See ``datagen/novel_phrasings.py`` for what this does and does not establish.
+
+    Args:
+        seed: Generator seed; the probe is deterministic like everything else.
+        seen: Bodies already used by the corpus and challenge set. The probe
+            composes clean prose from the same held-out scaffolds at the same
+            word budget as the challenge benign records, so a byte-identical
+            body is possible. Sharing the dedup set means such a collision
+            raises rather than silently putting the same text in two evaluation
+            sets.
     """
     from datagen.novel_phrasings import NOVEL_PAYLOADS
 
     rng = random.Random(seed + 977)
+    seen = set() if seen is None else seen
     records: list[Record] = []
 
     for index, payload in enumerate(NOVEL_PAYLOADS):
@@ -529,6 +539,14 @@ def generate_novel_phrasing_probe(seed: int) -> list[Record]:
             )
 
         text = "\n\n".join(paragraphs)
+        if text in seen:
+            raise RuntimeError(
+                f"novel-{index + 1:04d} duplicates a body already in the corpus or "
+                "challenge set. The same document in two evaluation sets would make "
+                "both figures wrong with no visible symptom."
+            )
+        seen.add(text)
+
         records.append(
             Record(
                 id=f"novel-{index + 1:04d}",

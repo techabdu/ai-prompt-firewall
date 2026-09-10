@@ -63,11 +63,15 @@ def distribution(records: list[Record], attribute: str) -> dict[str, int]:
 def build_manifest(
     main: list[Record],
     challenge: list[Record],
+    novel: list[Record],
     seed: int,
     tokenizer_used: bool,
     data_dir: Path,
 ) -> dict:
-    everything = main + challenge
+    # The probe is part of the shipped data and is gated on both caps, so it
+    # belongs in the statistics. Leaving it out reported 860 records while 884
+    # sat on disk, directly above a files table listing all three.
+    everything = main + challenge + novel
     words = [r.word_count for r in everything]
     tokens = [r.token_count for r in everything if r.token_count is not None]
 
@@ -91,6 +95,7 @@ def build_manifest(
             "malicious": sum(1 for r in main if r.label == 1),
             "benign": sum(1 for r in main if r.label == 0),
             "challenge": len(challenge),
+            "novel_phrasing_probe": len(novel),
         },
         "splits": dict(sorted(Counter(r.split for r in everything).items())),
         "techniques": distribution(main, "technique"),
@@ -143,6 +148,7 @@ deterministic: the same seed reproduces this corpus exactly.
 | — malicious (label 1) | {malicious} |
 | — benign (label 0) | {benign} |
 | Challenge set | {challenge} |
+| Novel-phrasing probe | {novel} |
 | **Total** | **{total}** |
 
 Splits: {split_line}
@@ -294,6 +300,7 @@ def render_dataset_card(manifest: dict) -> str:
         malicious=manifest["counts"]["malicious"],
         benign=manifest["counts"]["benign"],
         challenge=manifest["counts"]["challenge"],
+        novel=manifest["counts"]["novel_phrasing_probe"],
         total=manifest["counts"]["total"],
         split_line=", ".join(f"{k} {v}" for k, v in manifest["splits"].items()),
         technique_table=table(manifest["techniques"], "Technique"),
@@ -319,7 +326,11 @@ def main() -> int:
     print(f"Building corpus at seed {args.seed} ...")
     main_records, challenge_records = generate_corpus(args.seed)
     assign_splits(main_records, args.seed)
-    novel_records = generate_novel_phrasing_probe(args.seed)
+    # Share the dedup set, so a probe document can never silently duplicate a
+    # corpus or challenge body.
+    novel_records = generate_novel_phrasing_probe(
+        args.seed, seen={r.text for r in main_records + challenge_records}
+    )
 
     # Word cap: a hard failure, not a warning. A record over the cap cannot be
     # classified reliably and should never reach the corpus.
@@ -373,7 +384,10 @@ def main() -> int:
             [r for r in main_records if r.split == split],
         )
 
-    manifest = build_manifest(main_records, challenge_records, args.seed, tokenizer is not None, data_dir)
+    manifest = build_manifest(
+        main_records, challenge_records, novel_records, args.seed,
+        tokenizer is not None, data_dir,
+    )
     (data_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     (data_dir / "DATASET_CARD.md").write_text(render_dataset_card(manifest), encoding="utf-8")
 

@@ -15,10 +15,13 @@ SERVICE_NAME = "ai-prompt-firewall"
 # version.
 API_V1_PREFIX = "/v1"
 
-# Identifies which detector produced a given response. Phase 1 ships a stub,
-# and this string is what stops stub output being mistaken for a real verdict
-# in a log or a screenshot. Phase 3 changes it to a Stage 1 identifier; Phase 5
-# to a two-stage one.
+# Identifies which detector produced a given response. This string is what stops
+# stub output being mistaken for a real verdict in a log or a screenshot.
+#
+# Still "phase-1-stub" after Phase 3, and correctly so: Stage 1 exists as a
+# module but /v1/scan does not call it yet. The roadmap wires both stages behind
+# the endpoint in Phase 5, and that is when this changes -- along with
+# STAGE_1_READY in app/detection/__init__.py.
 DETECTOR_VERSION = "phase-1-stub"
 
 
@@ -36,6 +39,17 @@ DETECTOR_VERSION = "phase-1-stub"
 # Reproduce the sweep that produced this value with:
 #     python scripts/evaluate_stage1.py --sweep
 STAGE1_THRESHOLD = 0.30
+
+# Longest body Stage 1 will scan, in characters. Roughly nine times the 350-word
+# cap, so no legitimate document comes near it.
+#
+# It exists because nothing in ScanRequest enforces an upper bound -- over-length
+# documents are flagged, not rejected -- and Stage 1's cost grows faster than
+# linearly with input size. Without this, one oversized body took over a second
+# and produced a multi-megabyte verdict. The cheapness of the pre-filter is the
+# entire justification for running it before Stage 2, so it is enforced rather
+# than assumed.
+STAGE1_MAX_SCAN_CHARS = 20_000
 
 
 # --- Document limits --------------------------------------------------------

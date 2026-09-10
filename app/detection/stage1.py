@@ -22,8 +22,20 @@ single strong hit stands on its own, and the result cannot leave [0, 1].
 Three adjustments apply before combination -- a per-rule hit cap, a weighting-up
 of hits found in metadata, and a discount for hits inside quotation marks. Each
 is documented at its constant below.
+
+Mechanism versus content
+------------------------
+Two weights carry most of the design. Rules that detect an obfuscation
+*mechanism* -- a Base64-shaped run, character spacing, a handful of zero-width
+characters -- are deliberately held below the decision threshold, because
+checksums, flattened tables and copy-paste artefacts all produce those shapes in
+entirely ordinary documents. What carries real weight is
+``obfuscated_instruction``: an instruction that appears only once the
+obfuscation is undone. The mechanism alone is a coincidence; the mechanism plus
+a recovered instruction is not.
 """
 
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -40,6 +52,12 @@ from app.detection.rules import (
 #: cap, one lenient rule firing repeatedly saturates the score by itself and the
 #: other twelve rules stop affecting the outcome.
 MAX_HITS_PER_RULE = 3
+
+#: Upper bound on the hits retained in a result. The cap above applies to
+#: scoring; without this one a pathological document also produced tens of
+#: thousands of RuleHit objects and a multi-megabyte verdict, since every match
+#: was materialised and serialised regardless.
+MAX_HITS_RETAINED = 50
 
 #: Hits inside a metadata field are weighted up. A title is a short descriptive
 #: label, so an instruction occupying part of one is far more anomalous than the
@@ -61,13 +79,18 @@ MAX_SINGLE_WEIGHT = 0.95
 #: fields are labels, not paragraphs.
 METADATA_LONG_FIELD_WORDS = 15
 
-#: Zero-width characters below this count are treated as incidental: a couple can
-#: survive an innocent copy and paste out of a web page.
-ZERO_WIDTH_INCIDENTAL_LIMIT = 2
-ZERO_WIDTH_INCIDENTAL_WEIGHT = 0.25
+#: Zero-width characters, banded by count. A couple genuinely do survive an
+#: innocent copy and paste out of a web page or a CMS editor, so at that level
+#: this must not flag a document by itself: 0.20 sits below any sane threshold.
+#: Beyond a handful the copy-paste explanation stops being plausible.
+ZERO_WIDTH_BANDS = ((2, 0.20), (5, 0.45))
+ZERO_WIDTH_HEAVY_WEIGHT = 0.65
 
-_QUOTE_OPEN = "“"
-_QUOTE_CLOSE = "”"
+#: Only balanced quotation pairs count. Parity-counting quote characters meant a
+#: single unmatched quote anywhere earlier in a document discounted every later
+#: hit by 0.4 -- enough on its own to drop a real attack under the threshold,
+#: which made a "weighting, not a decision" into a one-character evasion.
+_QUOTED_SPAN = re.compile(r'"[^"\n]{0,400}"|“[^”\n]{0,400}”')
 
 
 @dataclass(frozen=True)
@@ -105,6 +128,7 @@ class Stage1Result:
     triggered: bool
     hits: tuple[RuleHit, ...] = field(default_factory=tuple)
     latency_ms: float = 0.0
+    truncated: bool = False
 
     @property
     def rules_fired(self) -> tuple[str, ...]:
@@ -119,6 +143,7 @@ class Stage1Result:
             "score": round(self.score, 4),
             "triggered": self.triggered,
             "latency_ms": round(self.latency_ms, 4),
+            "scan_truncated": self.truncated,
             "rules_fired": list(self.rules_fired),
             "hits": [hit.as_dict() for hit in self.hits],
         }
@@ -128,26 +153,31 @@ class Stage1Result:
 
 
 def _excerpt(text: str, start: int, end: int, padding: int = 24) -> str:
-    """A short window around a match, for the evidence trail."""
-    fragment = text[max(0, start - padding): min(len(text), end + padding)]
-    return " ".join(fragment.split())
+    """A short, *sanitised* window around a match, for the evidence trail.
 
+    Invisible characters are stripped rather than passed through. An excerpt
+    quoting a Unicode-Tag payload verbatim carries the concealed instruction
+    into the scan response, and the response serialiser writes it out raw --
+    Starlette's JSONResponse uses ``ensure_ascii=False``. Any downstream
+    consumer that puts the verdict in front of a model would then receive the
+    smuggled instruction intact and invisible, which is precisely the outcome
+    this service exists to prevent. The firewall must not become a carrier for
+    what it catches.
 
-def _inside_quotes(text: str, position: int) -> bool:
-    """Whether a position falls inside a quotation.
-
-    Straight quotes are counted for parity; curly quotes are checked by which of
-    the pair appeared most recently. Neither is exact -- an unbalanced quote
-    elsewhere in the document throws the count off -- but the discount it feeds
-    is a weighting, not a decision, so an occasional misread costs little.
+    The recovered instruction is not lost: it reaches the evidence trail through
+    the phrase-rule hit on the de-obfuscated variant, as ordinary readable text.
     """
-    prefix = text[:position]
-    if prefix.count('"') % 2 == 1:
-        return True
+    fragment = text[max(0, start - padding): min(len(text), end + padding)]
+    return " ".join(normalise.strip_invisible(fragment).split())[:160]
 
-    last_open = prefix.rfind(_QUOTE_OPEN)
-    last_close = prefix.rfind(_QUOTE_CLOSE)
-    return last_open > last_close
+
+def _quoted_spans(text: str) -> list[tuple[int, int]]:
+    """Character ranges enclosed by a *balanced* pair of quotation marks."""
+    return [(match.start(), match.end()) for match in _QUOTED_SPAN.finditer(text)]
+
+
+def _inside_quotes(spans: list[tuple[int, int]], position: int) -> bool:
+    return any(start <= position < end for start, end in spans)
 
 
 def _effective_weight(base: float, *, in_metadata: bool, quoted: bool) -> float:
@@ -163,13 +193,16 @@ def _effective_weight(base: float, *, in_metadata: bool, quoted: bool) -> float:
 
 
 def _apply_phrase_rules(text: str, location: str, variant: str) -> list[RuleHit]:
-    """Run every phrase rule over one view of the document."""
+    """Run every phrase rule over one view of one field."""
     in_metadata = location != "body"
+    spans = _quoted_spans(text)
     hits: list[RuleHit] = []
 
     for rule in PHRASE_RULES:
-        for match in rule.pattern.finditer(text):
-            quoted = _inside_quotes(text, match.start())
+        for index, match in enumerate(rule.pattern.finditer(text)):
+            if index >= MAX_HITS_PER_RULE:
+                break
+            quoted = _inside_quotes(spans, match.start())
             hits.append(
                 RuleHit(
                     rule_id=rule.id,
@@ -184,32 +217,66 @@ def _apply_phrase_rules(text: str, location: str, variant: str) -> list[RuleHit]
     return hits
 
 
-def _apply_character_rules(text: str) -> list[RuleHit]:
-    """Run the obfuscation detectors over the raw document.
+def _zero_width_weight(count: int) -> float:
+    for limit, weight in ZERO_WIDTH_BANDS:
+        if count <= limit:
+            return weight
+    return ZERO_WIDTH_HEAVY_WEIGHT
+
+
+def _apply_character_rules(text: str, location: str) -> list[RuleHit]:
+    """Run the obfuscation detectors over the raw text of one field.
 
     Raw only: these rules detect the concealment itself, and normalising first
     would erase the very thing they look for.
+
+    Applied to metadata fields as well as the body. They were once body-only,
+    which meant a Unicode-Tag payload in a title scored 0.000 while the same
+    payload in the body scored 0.999 -- every concealment mechanism was
+    invisible in exactly the field the metadata_payload technique targets.
     """
+    in_metadata = location != "body"
     hits: list[RuleHit] = []
+
+    # A Base64 run that decodes into English is a different fact from one that
+    # merely looks like Base64, and the shape rule cannot tell them apart. Held
+    # separately so the shape stays weak (checksums) while encoded prose carries
+    # real weight even when the decoded sentence matches no phrase rule.
+    decoded_runs = normalise.find_base64_runs(text)
+    if decoded_runs:
+        rule = SYNTHETIC_RULES["decoded_prose_blob"]
+        for blob, decoded in decoded_runs[:MAX_HITS_PER_RULE]:
+            hits.append(
+                RuleHit(
+                    rule_id=rule.id,
+                    weight=_effective_weight(rule.weight, in_metadata=in_metadata, quoted=False),
+                    location=location,
+                    variant="decoded",
+                    excerpt=_excerpt(decoded, 0, min(len(decoded), 80), padding=0),
+                )
+            )
 
     for rule_id, rule in CHARACTER_RULES.items():
         matches = list(rule.pattern.finditer(text))
         if not matches:
             continue
 
-        weight = rule.weight
-        if rule_id == "zero_width_chars" and len(matches) <= ZERO_WIDTH_INCIDENTAL_LIMIT:
-            # A stray zero-width character is far more likely to be a copy-paste
-            # artefact than an attack, so a handful is weak evidence rather than
-            # strong.
-            weight = ZERO_WIDTH_INCIDENTAL_WEIGHT
+        if rule_id == "zero_width_chars":
+            weight = _zero_width_weight(len(matches))
+            # One hit, not one per character: banding already expresses the
+            # strength, and compounding it by noisy-OR turned two supposedly
+            # incidental characters into a flagged document.
+            matches = matches[:1]
+        else:
+            weight = rule.weight
+            matches = matches[:MAX_HITS_PER_RULE]
 
-        for match in matches[:MAX_HITS_PER_RULE]:
+        for match in matches:
             hits.append(
                 RuleHit(
                     rule_id=rule_id,
-                    weight=weight,
-                    location="body",
+                    weight=_effective_weight(weight, in_metadata=in_metadata, quoted=False),
+                    location=location,
                     variant="raw",
                     excerpt=_excerpt(text, match.start(), match.end()),
                 )
@@ -218,16 +285,51 @@ def _apply_character_rules(text: str) -> list[RuleHit]:
     return hits
 
 
-def _apply_metadata_rules(metadata: dict[str, str]) -> list[RuleHit]:
+def _scan_field(text: str, location: str) -> tuple[list[RuleHit], bool]:
+    """Score one field: character rules, then phrase rules over every variant.
+
+    Returns the hits and whether any phrase rule matched *only* after an
+    obfuscation was undone.
+
+    A derived variant contains the whole field, so a phrase already present in
+    plain text matches the derived variant too. Counting those again both
+    double-scored the same sentence and set the obfuscation flag on documents
+    where nothing was obfuscated at all -- one unrelated spaced run was enough
+    to take a plain override from 0.60 to 0.99. Only rules that did not fire on
+    the raw text count as recovered.
+    """
+    hits = _apply_character_rules(text, location)
+
+    fired_on_raw: set[str] = set()
+    recovered = False
+
+    for variant in normalise.build_variants(text):
+        variant_hits = _apply_phrase_rules(variant.text, location, variant.name)
+        if not variant.derived:
+            fired_on_raw.update(hit.rule_id for hit in variant_hits)
+            hits.extend(variant_hits)
+            continue
+
+        new_hits = [hit for hit in variant_hits if hit.rule_id not in fired_on_raw]
+        if new_hits:
+            recovered = True
+            hits.extend(new_hits)
+
+    return hits, recovered
+
+
+def _apply_metadata_rules(metadata: dict[str, str]) -> tuple[list[RuleHit], bool]:
     """Examine metadata fields individually rather than as part of the body."""
     hits: list[RuleHit] = []
+    recovered = False
 
     for key, value in metadata.items():
         if not isinstance(value, str) or not value.strip():
             continue
 
-        for variant in normalise.build_variants(value):
-            hits.extend(_apply_phrase_rules(variant.text, location=key, variant=variant.name))
+        field_hits, field_recovered = _scan_field(value, location=key)
+        hits.extend(field_hits)
+        recovered = recovered or field_recovered
 
         if len(value.split()) > METADATA_LONG_FIELD_WORDS:
             rule = SYNTHETIC_RULES["metadata_anomaly"]
@@ -237,11 +339,11 @@ def _apply_metadata_rules(metadata: dict[str, str]) -> list[RuleHit]:
                     weight=rule.weight,
                     location=key,
                     variant="raw",
-                    excerpt=" ".join(value.split())[:80],
+                    excerpt=_excerpt(value, 0, min(len(value), 80), padding=0),
                 )
             )
 
-    return hits
+    return hits, recovered
 
 
 def _score(hits: list[RuleHit]) -> float:
@@ -280,23 +382,27 @@ def scan(
     Returns:
         A score in [0, 1], the binary decision at the threshold, and every hit
         that contributed.
+
+    Oversized input is truncated rather than scanned in full. The service's
+    documents are capped at roughly 350 words, but nothing in the request model
+    enforces an upper bound, and the cost of scanning grows faster than linearly
+    -- a single half-megabyte body took over a second and produced a
+    multi-megabyte verdict. Stage 1's cheapness is the justification for the
+    whole two-stage design, so it declines to be made expensive.
     """
     started = time.perf_counter()
     threshold = config.STAGE1_THRESHOLD if threshold is None else threshold
     metadata = metadata or {}
 
-    hits = _apply_character_rules(text)
+    truncated = len(text) > config.STAGE1_MAX_SCAN_CHARS
+    if truncated:
+        text = text[: config.STAGE1_MAX_SCAN_CHARS]
 
-    obfuscation_seen = False
-    for variant in normalise.build_variants(text):
-        variant_hits = _apply_phrase_rules(variant.text, location="body", variant=variant.name)
-        hits.extend(variant_hits)
-        if variant.derived and variant_hits:
-            obfuscation_seen = True
+    hits, body_recovered = _scan_field(text, location="body")
+    metadata_hits, metadata_recovered = _apply_metadata_rules(metadata)
+    hits.extend(metadata_hits)
 
-    hits.extend(_apply_metadata_rules(metadata))
-
-    if obfuscation_seen:
+    if body_recovered or metadata_recovered:
         # A phrase matched only once an obfuscation was undone. Concealment and
         # content are two separate facts, so both contribute.
         rule = SYNTHETIC_RULES["obfuscated_instruction"]
@@ -304,7 +410,7 @@ def scan(
             RuleHit(
                 rule_id=rule.id,
                 weight=rule.weight,
-                location="body",
+                location="body" if body_recovered else "metadata",
                 variant="derived",
                 excerpt="instruction recovered after de-obfuscation",
             )
@@ -312,12 +418,14 @@ def scan(
 
     score = _score(hits)
     latency_ms = (time.perf_counter() - started) * 1000
+    ranked = sorted(hits, key=lambda h: -h.weight)[:MAX_HITS_RETAINED]
 
     return Stage1Result(
         score=score,
         triggered=score >= threshold,
-        hits=tuple(sorted(hits, key=lambda h: -h.weight)),
+        hits=tuple(ranked),
         latency_ms=latency_ms,
+        truncated=truncated,
     )
 
 
