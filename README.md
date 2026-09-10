@@ -15,11 +15,12 @@ Kamaludeen Abdulkadir — CST/22/CBS/00753.
 
 ---
 
-## Status: Phase 1 of 7 — skeleton only
+## Status: Phase 3 of 7 — Stage 1 built, not yet wired
 
-**No detection logic is built yet.** `/v1/scan` accepts documents, validates them and
-returns a stub result tagged `phase-1-stub`. It carries no detection result and must not
-be read as one.
+The heuristic pre-filter exists and is measured. **`/v1/scan` does not call it yet** — it
+still returns a stub tagged `phase-1-stub`, which carries no detection result and must not
+be read as one. The roadmap wires both stages behind the endpoint in Phase 5, and
+`stage_1_ready` stays `false` until it does.
 
 | Phase | What it adds | State |
 |---|---|---|
@@ -151,7 +152,7 @@ metadata field.
 | `doc_id` | string \| null | Echoed from the request. |
 | `is_injection` | boolean | The binary decision. |
 | `score` | float 0.0–1.0 | Confidence, so the decision threshold stays tunable. |
-| `stage_1` | object \| null | Heuristic detail. Null until Phase 3. |
+| `stage_1` | object \| null | Heuristic detail. Null until Phase 5 wires Stage 1 in. |
 | `stage_2` | object \| null | Classifier detail. Null until Phase 5. |
 | `word_count` | integer | Words in the submitted body. |
 | `truncated` | boolean | True when the document exceeds the word cap. |
@@ -175,13 +176,11 @@ above.
 
 ---
 
----
-
 ## The dataset
 
-860 labelled documents: 800 in the main corpus, evenly split between benign and
-indirect-injection-bearing, plus a 60-document challenge set. English only, every
-document inside the word cap.
+884 labelled documents: 800 in the main corpus, evenly split between benign and
+indirect-injection-bearing, a 60-document challenge set, and a 24-document
+novel-phrasing probe. English only, every document inside the word cap.
 
 ```bash
 python scripts/build_dataset.py      # rebuild the corpus (deterministic)
